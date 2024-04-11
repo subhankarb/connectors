@@ -328,10 +328,11 @@ class ExchangeUsers:
 class Office365Users:
     """Fetch users from Office365 Active Directory"""
 
-    def __init__(self, client_id, client_secret, tenant_id):
+    def __init__(self, client_id, client_secret, tenant_id, user_selector_filter=None):
         self.tenant_id = tenant_id
         self.client_id = client_id
         self.client_secret = client_secret
+        self.user_selector_filter = user_selector_filter
 
     @cached_property
     def _get_session(self):
@@ -387,7 +388,11 @@ class Office365Users:
     )
     async def get_users(self):
         access_token = await self._fetch_token()
-        url = f"https://graph.microsoft.com/v1.0/users?$top={TOP}"
+        url = f"https://graph.microsoft.com/v1.0/users"
+        if self.user_selector_filter is not None:
+            _formatter = ','.join(f"'{w}'" for w in self.user_selector_filter.split(","))
+            _filter = f"$filter=mail in ({_formatter})"
+            url = f"{url}?{_filter}"
         while True:
             try:
                 async with self._get_session.get(
@@ -409,6 +414,7 @@ class Office365Users:
         async for users in self.get_users():
             for user in users.get("value", []):
                 mail = user.get("mail")
+                logger.info(f"Fetching user account for {mail}")
                 if mail is None:
                     continue
 
@@ -586,6 +592,7 @@ class OutlookClient:
                 client_id=self.configuration["client_id"],
                 client_secret=self.configuration["client_secret"],
                 tenant_id=self.configuration["tenant_id"],
+                user_selector_filter=self.configuration.get("user_selector_filter", None),
             )
 
         return ExchangeUsers(
@@ -610,7 +617,7 @@ class OutlookClient:
                 # If 'Archive' folder is not present, skipping the iteration
                 try:
                     folder_object = (
-                        account.root / "Top of Information Store" / "Archive"
+                        account.root // "Top of Information Store" // "Archive"
                     )
                 except Exception:  # noqa S112
                     continue
@@ -638,7 +645,7 @@ class OutlookClient:
             yield task
 
     async def get_contacts(self, account):
-        folder = account.root / "Top of Information Store" / "Contacts"
+        folder = account.root // "Top of Information Store" // "Contacts"
         for contact in await asyncio.to_thread(folder.all().only, *CONTACT_FIELDS):
             yield contact
 
@@ -766,6 +773,13 @@ class OutlookDataSource(BaseDataSource):
                 "ui_restrictions": ["advanced"],
                 "value": False,
             },
+            "user_selector_filter": {
+                "depends_on": [{"field": "data_source", "value": OUTLOOK_CLOUD}],
+                "label": "User selector filter",
+                "tooltip": "comma separated list of email addresses to fetch data for",
+                "order": 13,
+                "type": "str",
+            }
         }
 
     async def close(self):
@@ -932,8 +946,8 @@ class OutlookDataSource(BaseDataSource):
                 account=account, timezone=timezone
             ):
                 yield calendar
-
-            async for child_calendar in self._fetch_child_calendars(
-                account=account, timezone=timezone
-            ):
-                yield child_calendar
+            # Disabled for now as exchange library going through uodates 5.3 will get the updates
+            # async for child_calendar in self._fetch_child_calendars(
+            #     account=account, timezone=timezone
+            # ):
+            #     yield child_calendar

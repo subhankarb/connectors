@@ -403,13 +403,15 @@ class OneDriveClient:
             for permission_detail in response:
                 yield permission_detail
 
-    async def get_owned_files(self, user_id, skipped_extensions=None, pattern=""):
+    async def get_owned_files(self, user_id, mail, skipped_extensions=None, pattern=""):
         params = {"$select": ITEM_FIELDS}
         delta_endpoint = ENDPOINTS[DELTA].format(user_id=user_id)
 
         url = parse.urljoin(BASE_URL, delta_endpoint)
         async for response in self.paginated_api_call(url, params):
             for file in response:
+                file["user_id"] = user_id
+                file["mail"] = mail
                 if file.get("name", "") != "root":
                     parent_path = file.get("parentReference", {}).get("path")
                     is_match = glob.globmatch(parent_path, pattern, flags=glob.GLOBSTAR)
@@ -582,8 +584,10 @@ class OneDriveDataSource(BaseDataSource):
             "size": file.get("size"),
             "url": file.get("webUrl"),
         }
-        if self._dls_enabled():
+        if self._dls_enabled() and ACCESS_CONTROL in file:
             modified_document[ACCESS_CONTROL] = file[ACCESS_CONTROL]
+        else:
+            modified_document[ACCESS_CONTROL] = [f"mail:{file['mail']}"]
         return modified_document
 
     def _dls_enabled(self):
@@ -770,7 +774,7 @@ class OneDriveDataSource(BaseDataSource):
                 for mail in user_mails:
                     user_id = user_mail_id_map.get(mail)
                     async for entity, download_url in self.client.get_owned_files(
-                        user_id, skipped_extensions, pattern
+                        user_id, mail, skipped_extensions, pattern
                     ):
                         yield self.send_document_to_es(entity, download_url)
         else:
